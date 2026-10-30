@@ -1,0 +1,281 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Connect WhatsApp Business | BMS TaskBot</title>
+  <meta name="robots" content="noindex,nofollow">
+  <style>
+    :root {
+      font-family: Arial, Helvetica, sans-serif;
+      color: #1f2937;
+      background: #f4f6f8;
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      min-height: 100vh;
+      display: grid;
+      place-items: center;
+      padding: 24px;
+    }
+    main {
+      width: min(680px, 100%);
+      background: #fff;
+      border: 1px solid #dfe3e8;
+      border-radius: 16px;
+      padding: 32px;
+      box-shadow: 0 10px 30px rgba(0,0,0,.06);
+    }
+    h1 { margin: 0 0 12px; font-size: 28px; }
+    p { line-height: 1.55; }
+    .muted { color: #5f6b7a; }
+    button {
+      appearance: none;
+      border: 0;
+      border-radius: 10px;
+      padding: 12px 18px;
+      font: inherit;
+      font-weight: 700;
+      cursor: pointer;
+      background: #1877f2;
+      color: #fff;
+      margin-top: 10px;
+    }
+    button:disabled { opacity: .55; cursor: not-allowed; }
+    #status {
+      margin-top: 22px;
+      padding: 14px;
+      border-radius: 10px;
+      background: #f8fafc;
+      border: 1px solid #e2e8f0;
+      white-space: pre-wrap;
+      overflow-wrap: anywhere;
+    }
+    .success { background: #eefbf3 !important; border-color: #b9e6c8 !important; }
+    .error { background: #fff3f3 !important; border-color: #efb8b8 !important; }
+    code { background: #f1f5f9; padding: 2px 5px; border-radius: 4px; }
+  </style>
+</head>
+<body>
+  <main>
+    <h1>Connect WhatsApp Business</h1>
+    <p>
+      This preview page is for testing BMS TaskBot Embedded Signup v4 with
+      WhatsApp Business App Coexistence.
+    </p>
+    <p class="muted">
+      The test does not replace the taskbot's current WhatsApp token or phone number,
+      subscribe a customer to webhooks, or store customer credentials.
+    </p>
+
+    <button id="connectButton" type="button" disabled>Loading Meta signup…</button>
+
+    <div id="status">Preparing Embedded Signup…</div>
+  </main>
+
+  <script>
+    const META_APP_ID = "1190446797491057";
+    const META_CONFIG_ID = "1484347816916776";
+    const META_GRAPH_API_VERSION = "v25.0";
+    const EXCHANGE_ENDPOINT =
+      "https://whatsapp-taskbot-embedded-signup-preview.onrender.com/meta/embedded-signup/exchange";
+
+    let oauthCode = "";
+    let signupSession = null;
+    let exchangeStarted = false;
+    let fallbackTimer = null;
+
+    const connectButton = document.getElementById("connectButton");
+    const statusBox = document.getElementById("status");
+
+    function setStatus(message, type = "") {
+      statusBox.textContent = message;
+      statusBox.className = type;
+    }
+
+    function isMetaOrigin(origin) {
+      return origin === "https://www.facebook.com" ||
+        origin === "https://web.facebook.com";
+    }
+
+    function normalizeSessionPayload(payload) {
+      if (!payload || typeof payload !== "object") {
+        return null;
+      }
+
+      const data = payload.data || {};
+      return {
+        event: payload.event || "",
+        wabaId: String(data.waba_id || ""),
+        phoneNumberId: String(data.phone_number_id || ""),
+        businessId: String(data.business_id || ""),
+        isOnBizApp: Boolean(data.is_on_biz_app),
+      };
+    }
+
+    async function exchangeCode() {
+      if (exchangeStarted || !oauthCode) {
+        return;
+      }
+
+      exchangeStarted = true;
+      clearTimeout(fallbackTimer);
+      connectButton.disabled = true;
+      setStatus("Meta signup completed. Verifying the authorization with the BMS backend…");
+
+      try {
+        const response = await fetch(EXCHANGE_ENDPOINT, {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+          },
+          body: JSON.stringify({
+            code: oauthCode,
+            wabaId: signupSession?.wabaId || "",
+            phoneNumberId: signupSession?.phoneNumberId || "",
+            businessId: signupSession?.businessId || "",
+            signupEvent: signupSession?.event || "",
+          }),
+        });
+
+        const result = await response.json().catch(() => ({}));
+
+        if (!response.ok || !result.success) {
+          throw new Error(result.message || "Backend verification failed.");
+        }
+
+        const lines = [
+          "Embedded Signup authorization succeeded.",
+          result.wabaId ? "WABA ID: " + result.wabaId : "WABA ID: not returned in session event",
+          result.phoneNumberId
+            ? "Phone Number ID: " + result.phoneNumberId
+            : "Phone Number ID: not returned in session event",
+          Array.isArray(result.phoneNumbers)
+            ? "Phone assets found: " + result.phoneNumbers.length
+            : "Phone assets found: not checked",
+          "",
+          "No access token was returned to this webpage or stored by this preview route.",
+        ];
+
+        setStatus(lines.join("\n"), "success");
+      } catch (error) {
+        exchangeStarted = false;
+        connectButton.disabled = false;
+        setStatus(
+          "Embedded Signup reached the backend, but verification failed.\n" +
+            (error.message || "Unknown error"),
+          "error"
+        );
+      }
+    }
+
+    function maybeExchange() {
+      if (!oauthCode || exchangeStarted) {
+        return;
+      }
+
+      if (signupSession) {
+        exchangeCode();
+        return;
+      }
+
+      clearTimeout(fallbackTimer);
+      fallbackTimer = setTimeout(exchangeCode, 5000);
+    }
+
+    window.addEventListener("message", (event) => {
+      if (!isMetaOrigin(event.origin)) {
+        return;
+      }
+
+      let payload = event.data;
+
+      if (typeof payload === "string") {
+        try {
+          payload = JSON.parse(payload);
+        } catch {
+          return;
+        }
+      }
+
+      if (!payload || payload.type !== "WA_EMBEDDED_SIGNUP") {
+        return;
+      }
+
+      if (
+        payload.event === "FINISH_WHATSAPP_BUSINESS_APP_ONBOARDING" ||
+        payload.event === "FINISH"
+      ) {
+        signupSession = normalizeSessionPayload(payload);
+        maybeExchange();
+      } else if (payload.event === "CANCEL") {
+        setStatus("Embedded Signup was cancelled.", "error");
+      } else if (payload.event === "ERROR") {
+        setStatus("Meta reported an Embedded Signup error.", "error");
+      }
+    });
+
+    function launchWhatsAppSignup() {
+      oauthCode = "";
+      signupSession = null;
+      exchangeStarted = false;
+      clearTimeout(fallbackTimer);
+
+      setStatus("Opening Meta Embedded Signup…");
+      connectButton.disabled = true;
+
+      FB.login(
+        function(response) {
+          if (response?.authResponse?.code) {
+            oauthCode = response.authResponse.code;
+            setStatus("Authorization code received. Waiting for WhatsApp signup session details…");
+            maybeExchange();
+          } else {
+            connectButton.disabled = false;
+            setStatus("Meta login did not return an authorization code.", "error");
+          }
+        },
+        {
+          config_id: META_CONFIG_ID,
+          response_type: "code",
+          override_default_response_type: true,
+          extras: {
+            setup: {},
+            featureType: "whatsapp_business_app_onboarding",
+            sessionInfoVersion: "3",
+          },
+        }
+      );
+    }
+
+    window.fbAsyncInit = function() {
+      FB.init({
+        appId: META_APP_ID,
+        cookie: true,
+        xfbml: true,
+        version: META_GRAPH_API_VERSION,
+      });
+
+      connectButton.disabled = false;
+      connectButton.textContent = "Connect WhatsApp Business";
+      connectButton.addEventListener("click", launchWhatsAppSignup);
+      setStatus("Ready to start the Meta Embedded Signup test.");
+    };
+
+    (function(d, s, id) {
+      let js;
+      const firstScript = d.getElementsByTagName(s)[0];
+
+      if (d.getElementById(id)) {
+        return;
+      }
+
+      js = d.createElement(s);
+      js.id = id;
+      js.src = "https://connect.facebook.net/en_US/sdk.js";
+      firstScript.parentNode.insertBefore(js, firstScript);
+    })(document, "script", "facebook-jssdk");
+  </script>
+</body>
+</html>
